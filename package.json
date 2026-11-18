@@ -1,0 +1,94 @@
+{
+  "name": "zap-mcp",
+  "productName": "Zap MCP",
+  "version": "0.1.0",
+  "description": "macOS menu bar app that links WhatsApp accounts and exposes the chats you choose to Claude as a local MCP server.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/well-prado/zap-mcp.git"
+  },
+  "homepage": "https://github.com/well-prado/zap-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/well-prado/zap-mcp/issues"
+  },
+  "keywords": [
+    "whatsapp",
+    "mcp",
+    "claude",
+    "model-context-protocol",
+    "electron",
+    "macos",
+    "menu-bar",
+    "baileys"
+  ],
+  "type": "module",
+  "main": "out/main/index.js",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build && npm run build:shim",
+    "build:shim": "esbuild src/shim/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=mcpb/server/index.mjs --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\"",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "pack:mac": "npm run build && electron-builder --mac --dir",
+    "dist:mac": "npm run build && npm run pack:mcpb && electron-builder --mac",
+    "pack:mcpb": "npm run build:shim && mcpb pack mcpb zap-mcp.mcpb"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "baileys": "7.0.0-rc14",
+    "pino": "10.4.0",
+    "qrcode": "1.5.4",
+    "sharp": "0.35.5",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2",
+    "@types/node": "24.19.2",
+    "@types/qrcode": "1.5.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "electron": "45.2.2",
+    "electron-builder": "26.18.1",
+    "electron-vite": "6.0.0",
+    "esbuild": "0.28.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
+  },
+  "build": {
+    "appId": "dev.zapmcp.app",
+    "productName": "Zap MCP",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**",
+      "resources/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "zap-mcp.mcpb",
+        "to": "zap-mcp.mcpb"
+      }
+    ],
+    "asarUnpack": [
+      "**/node_modules/sharp/**",
+      "**/node_modules/@img/**"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "extendInfo": {
+        "LSUIElement": true
+      }
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "manifest_version": "0.3",
+  "name": "zap-mcp",
+  "display_name": "Zap MCP (WhatsApp)",
+  "version": "0.1.0",
+  "description": "Read and reply to the WhatsApp chats you allowed in the Zap MCP Mac app.",
+  "long_description": "Bridge to the Zap MCP menu bar app. The app links your WhatsApp accounts and decides which chats Claude can see and whether it may send; this extension only forwards Claude's requests to it. The tools work only while the app is running on this Mac.",
+  "author": {
+    "name": "Zap MCP contributors"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/well-prado/zap-mcp"
+  },
+  "homepage": "https://github.com/well-prado/zap-mcp",
+  "support": "https://github.com/well-prado/zap-mcp/issues",
+  "license": "MIT",
+  "keywords": [
+    "whatsapp",
+    "messaging",
+    "local"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/index.mjs"
+      ]
+    }
+  },
+  "tools": [
+    {
+      "name": "list_accounts",
+      "description": "List linked WhatsApp accounts."
+    },
+    {
+      "name": "list_chats",
+      "description": "List the chats you allowed Claude to see."
+    },
+    {
+      "name": "read_messages",
+      "description": "Read messages from an allowed chat."
+    },
+    {
+      "name": "search_messages",
+      "description": "Full-text search across allowed chats."
+    },
+    {
+      "name": "get_media",
+      "description": "Open an image, video, audio or document from a message."
+    },
+    {
+      "name": "send_message",
+      "description": "Send a text message (may require your approval)."
+    },
+    {
+      "name": "send_file",
+      "description": "Send a file (always requires your approval)."
+    }
+  ],
+  "compatibility": {
+    "platforms": [
+      "darwin"
+    ],
+    "runtimes": {
+      "node": ">=20.0.0"
+    }
+  }
+}
