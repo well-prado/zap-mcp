@@ -103,11 +103,13 @@ The first run downloads Electron. Then:
 
 ### Claude Desktop
 
+Download **`zap-mcp-<version>.mcpb`** from the [latest release](https://github.com/well-prado/zap-mcp/releases), or build it yourself:
+
 ```bash
 npm run pack:mcpb
 ```
 
-Double-click `zap-mcp.mcpb`, or drag it into **Settings → Extensions**. You can also use **Connect to Claude → Install extension** inside the app.
+Double-click the `.mcpb` file, or drag it into **Settings → Extensions**. You can also use **Connect to Claude → Install extension** inside the app.
 
 The extension is a tiny stdio bridge that forwards Claude's calls to the app. While the app is closed, it tells Claude to ask you to open it.
 
@@ -220,7 +222,8 @@ node scripts/mcp-call.mjs list_chats '{}'   # call any tool like Claude would
 - [ ] Transcribe voice notes locally with whisper.cpp
 - [ ] Multiple keyframes for videos with ffmpeg
 - [ ] App icon, code signing, notarization, auto-update
-- [ ] Signed releases with the `.mcpb` attached
+- [x] Releases with the Claude Desktop extension (`.mcpb`) attached
+- [ ] Signed and notarized `.app` / `.dmg` in releases
 - [ ] English UI (currently pt-BR) and i18n
 - [ ] Reactions and polls as structured data
 - [ ] Optional authenticated tunnel for Claude on web and mobile
