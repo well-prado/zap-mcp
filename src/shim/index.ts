@@ -15,7 +15,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { APP_DIR_NAME, CONNECTION_FILE, SERVER_INSTRUCTIONS, TOOLS, type ToolName } from '../shared/tools'
 
-const VERSION = '0.1.0'
+const VERSION = '0.1.1'
 const connectionFile =
   process.env.ZAP_MCP_CONNECTION ?? join(homedir(), 'Library', 'Application Support', APP_DIR_NAME, CONNECTION_FILE)
 
@@ -50,6 +50,7 @@ async function getClient(): Promise<Client | CallToolResult> {
   try {
     await c.connect(transport)
   } catch (err) {
+    await c.close().catch(() => {})
     return notRunning(err instanceof Error ? err.message : undefined)
   }
   client = c
@@ -57,20 +58,32 @@ async function getClient(): Promise<Client | CallToolResult> {
   return c
 }
 
+const ATTEMPTS = 3
+const RETRY_DELAY_MS = 500
+
+/**
+ * Forward one tool call to the app. A connection can fail transiently (the app is still starting,
+ * or it restarted since we connected), so each failure drops the cached client and tries again
+ * after a short pause. Only after every attempt fails do we tell Claude the app is not running.
+ */
 async function forward(name: ToolName, args: unknown): Promise<CallToolResult> {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let last: CallToolResult = notRunning()
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, RETRY_DELAY_MS))
     const c = await getClient()
-    if (!(c instanceof Client)) return c
+    if (!(c instanceof Client)) {
+      last = c
+      continue
+    }
     try {
       return (await c.callTool({ name, arguments: args as Record<string, unknown> })) as CallToolResult
     } catch (err) {
-      // The app may have restarted since we connected; reconnect once.
       client = undefined
       clientKey = undefined
-      if (attempt === 1) return notRunning(err instanceof Error ? err.message : undefined)
+      last = notRunning(err instanceof Error ? err.message : undefined)
     }
   }
-  return notRunning()
+  return last
 }
 
 const server = new McpServer({ name: 'zap-mcp', version: VERSION }, { instructions: SERVER_INSTRUCTIONS })

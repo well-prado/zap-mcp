@@ -233,6 +233,10 @@ function registerIpc(): void {
 // ---------- lifecycle ----------
 
 app.on('second-instance', () => showWindow())
+// Opening the app again from Finder, Spotlight or Launchpad while it runs: bring up the panel.
+app.on('activate', () => {
+  if (store) showWindow()
+})
 app.on('window-all-closed', () => {
   // Keep running in the menu bar.
 })
@@ -261,9 +265,12 @@ app.whenReady().then(async () => {
   createTray()
   await startMcp()
   changed()
-  await accounts.startAll()
 
-  if (!accounts.list().length || process.env.ZAP_SHOW_WINDOW) showWindow()
+  // Opened by hand (Applications, Spotlight): show the panel. Opened at login: stay quietly in the menu bar.
+  const openedAtLogin = app.getLoginItemSettings().wasOpenedAtLogin
+  if (!openedAtLogin || !accounts.list().length || process.env.ZAP_SHOW_WINDOW) showWindow()
+
+  await accounts.startAll()
 })
 
 app.on('will-quit', (e) => {
