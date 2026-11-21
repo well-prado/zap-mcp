@@ -7,6 +7,8 @@ import type {
   ChatView,
   NewChatPolicy,
   PermissionLevel,
+  WhisperLanguage,
+  WhisperModelId,
   ZapApi
 } from '@shared/types'
 
@@ -17,7 +19,7 @@ declare global {
 }
 const zap = window.zap
 
-type Tab = 'accounts' | 'chats' | 'approvals' | 'activity' | 'claude'
+type Tab = 'accounts' | 'chats' | 'approvals' | 'activity' | 'whisper' | 'claude'
 
 const LEVELS: { value: PermissionLevel; label: string; hint: string }[] = [
   { value: 'blocked', label: 'Bloqueado', hint: 'O Claude nem sabe que este chat existe' },
@@ -60,6 +62,7 @@ export function App() {
     { id: 'chats', label: 'Chats e permissões' },
     { id: 'approvals', label: 'Aprovações', badge: state.pendingApprovals },
     { id: 'activity', label: 'Atividade do Claude' },
+    { id: 'whisper', label: 'Transcrição de áudio' },
     { id: 'claude', label: 'Conectar ao Claude' }
   ]
 
@@ -85,6 +88,7 @@ export function App() {
         {tab === 'chats' && <Chats state={state} />}
         {tab === 'approvals' && <Approvals />}
         {tab === 'activity' && <Activity />}
+        {tab === 'whisper' && <Whisper state={state} />}
         {tab === 'claude' && <Claude state={state} />}
       </main>
     </div>
@@ -503,6 +507,181 @@ function Claude({ state }: { state: AppState }) {
           </div>
         </div>
       </div>
+    </section>
+  )
+}
+
+const fmtBytes = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`)
+
+const LANGUAGES: { value: WhisperLanguage; label: string }[] = [
+  { value: 'auto', label: 'Detectar automaticamente' },
+  { value: 'pt', label: 'Português' },
+  { value: 'en', label: 'English' },
+  { value: 'es', label: 'Español' }
+]
+
+function Whisper({ state }: { state: AppState }) {
+  const w = state.whisper
+  const s = state.settings
+  const [pick, setPick] = useState<WhisperModelId>(w.model ?? 'large-v3-turbo-q5_0')
+  const current = w.models.find((m) => m.id === w.model)
+  const picked = w.models.find((m) => m.id === pick)!
+
+  return (
+    <section>
+      <header>
+        <h1>Transcrição de áudio</h1>
+        <p>
+          Transforma os áudios do WhatsApp em texto, para o Claude ler, resumir e encontrar na busca. Tudo roda neste
+          Mac com o Whisper (whisper.cpp): nenhum áudio sai do seu computador. É opcional e nada é baixado até você
+          ativar.
+        </p>
+      </header>
+
+      {w.state === 'installing' && w.progress && (
+        <div className="card">
+          <div className="title">
+            {w.progress.step === 'engine' ? 'Baixando o motor do Whisper…' : `Baixando o modelo ${current?.label ?? ''}…`}
+          </div>
+          <div className="bar">
+            <span style={{ width: `${w.progress.total ? (w.progress.received / w.progress.total) * 100 : 0}%` }} />
+          </div>
+          <div className="row">
+            <span className="sub">
+              {fmtBytes(w.progress.received)} de {fmtBytes(w.progress.total)} · cada arquivo é conferido (SHA-256) antes
+              de ser usado
+            </span>
+            <button onClick={() => zap.whisperCancel()}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {w.state === 'installing' && !w.progress && <div className="card sub">Preparando o download…</div>}
+
+      {(w.state === 'off' || w.state === 'error') && (
+        <div className="card">
+          <div className="title">Escolha o modelo</div>
+          <div className="models">
+            {w.models.map((m) => (
+              <label key={m.id} className={`model ${pick === m.id ? 'on' : ''}`}>
+                <input type="radio" name="model" checked={pick === m.id} onChange={() => setPick(m.id)} />
+                <div>
+                  <div className="title">
+                    {m.label} <span className="sub">· {fmtBytes(m.bytes)}</span>
+                  </div>
+                  <div className="sub">{m.description}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+          {w.error && <div className="error">{w.error}</div>}
+          <div className="actions">
+            <button className="primary" onClick={() => zap.whisperInstall(pick)}>
+              Baixar e ativar ({fmtBytes(picked.bytes + 2_000_000)})
+            </button>
+          </div>
+          <p className="fine">Precisa de um Mac com Apple Silicon (M1 ou mais novo). Você pode remover tudo depois.</p>
+        </div>
+      )}
+
+      {w.state === 'ready' && current && (
+        <div className="cards">
+          <div className="card">
+            <div className="row">
+              <div>
+                <div className="title">Whisper ativo</div>
+                <div className="sub">
+                  Modelo {current.label} · ocupa {fmtBytes(w.diskBytes)}
+                </div>
+              </div>
+              <span className="pill ok">Ativo</span>
+            </div>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={s.whisperAuto}
+                onChange={(e) => void zap.setSettings({ whisperAuto: e.target.checked })}
+              />
+              Transcrever automaticamente os áudios novos (só de chats liberados)
+            </label>
+            <label>
+              Idioma dos áudios{' '}
+              <select
+                value={s.whisperLanguage}
+                onChange={(e) => void zap.setSettings({ whisperLanguage: e.target.value as WhisperLanguage })}
+              >
+                {LANGUAGES.map((l) => (
+                  <option key={l.value} value={l.value}>
+                    {l.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="fine">
+              Mesmo sem o automático, o Claude transcreve na hora os áudios que ele for ler.
+            </p>
+          </div>
+
+          <div className="card">
+            <div className="title">Áudios antigos</div>
+            {w.worker.running ? (
+              <>
+                <div className="sub">
+                  {w.worker.backfill ? 'Transcrevendo os áudios antigos…' : 'Transcrevendo áudios novos…'}{' '}
+                  {w.worker.done} prontos{w.worker.failed ? `, ${w.worker.failed} com erro` : ''} · faltam{' '}
+                  {w.untranscribed}
+                </div>
+                {w.worker.backfill && (
+                  <div className="actions">
+                    <button onClick={() => zap.whisperBackfill(false)}>Parar</button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="sub">
+                  {w.untranscribed === 0
+                    ? 'Todos os áudios dos chats liberados já estão transcritos.'
+                    : w.untranscribed === 1
+                      ? '1 áudio nos chats liberados ainda não tem transcrição.'
+                      : `${w.untranscribed} áudios nos chats liberados ainda não têm transcrição.`}
+                </div>
+                {!!w.untranscribed && (
+                  <div className="actions">
+                    <button onClick={() => zap.whisperBackfill(true)}>Transcrever agora</button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="title">Modelo</div>
+            <select value={pick} onChange={(e) => setPick(e.target.value as WhisperModelId)}>
+              {w.models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label} ({fmtBytes(m.bytes)})
+                </option>
+              ))}
+            </select>
+            <div className="actions">
+              <button disabled={pick === current.id} onClick={() => zap.whisperInstall(pick)}>
+                Trocar de modelo
+              </button>
+              <button
+                className="danger"
+                onClick={() => {
+                  if (confirm(`Remover o Whisper e liberar ${fmtBytes(w.diskBytes)}? As transcrições já feitas continuam.`)) {
+                    void zap.whisperRemove()
+                  }
+                }}
+              >
+                Remover Whisper
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }

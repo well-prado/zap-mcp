@@ -131,8 +131,15 @@ const DEFAULT_SETTINGS: AppSettings = {
   paused: false,
   syncFullHistory: true,
   openAtLogin: false,
-  mcpPort: DEFAULT_MCP_PORT
+  mcpPort: DEFAULT_MCP_PORT,
+  whisperModel: null,
+  whisperLanguage: 'auto',
+  whisperAuto: true,
+  whisperAutoSince: 0
 }
+
+/** Media types Whisper can transcribe. */
+export const AUDIO_MEDIA = ['voice', 'audio'] as const
 
 export interface MessageRow {
   accountId: string
@@ -163,9 +170,14 @@ export interface StoredMessage {
   media_type: string | null
   media_path: string | null
   quoted_id: string | null
+  /** 1 = `text` holds a Whisper transcript, -1 = transcription failed, 0 = not transcribed. */
+  transcribed: number
 }
 
 type Row = Record<string, unknown>
+
+const MESSAGE_COLUMNS =
+  'account_id, chat_jid, id, from_me, sender_jid, sender_name, ts, type, text, media_type, media_path, quoted_id, transcribed'
 
 export class Store {
   readonly db: DatabaseSync
@@ -173,6 +185,16 @@ export class Store {
   constructor(file: string) {
     this.db = new DatabaseSync(file)
     this.db.exec(SCHEMA)
+    this.migrate()
+  }
+
+  /** Additive schema changes for databases created by older versions. */
+  private migrate(): void {
+    const cols = (this.db.prepare('PRAGMA table_info(messages)').all() as { name: string }[]).map((c) => c.name)
+    if (!cols.includes('transcribed')) {
+      // Voice-note transcripts live in `text`, so full-text search covers what people said.
+      this.db.exec('ALTER TABLE messages ADD COLUMN transcribed INTEGER NOT NULL DEFAULT 0')
+    }
   }
 
   private tx<T>(fn: () => T): T {
@@ -463,7 +485,7 @@ export class Store {
   listMessages(accountId: string, chatJid: string, opts: { limit: number; before?: number; after?: number }): StoredMessage[] {
     const rows = this.db
       .prepare(
-        `SELECT account_id, chat_jid, id, from_me, sender_jid, sender_name, ts, type, text, media_type, media_path, quoted_id
+        `SELECT ${MESSAGE_COLUMNS}
          FROM messages WHERE account_id = ? AND chat_jid = ? AND ts < ? AND ts > ?
          ORDER BY ts DESC LIMIT ?`
       )
@@ -477,7 +499,7 @@ export class Store {
       this.db
         .prepare(
           `SELECT m.account_id, m.chat_jid, m.id, m.from_me, m.sender_jid, m.sender_name, m.ts, m.type, m.text,
-                  m.media_type, m.media_path, m.quoted_id,
+                  m.media_type, m.media_path, m.quoted_id, m.transcribed,
                   ${DISPLAY_NAME} AS chat_name
            FROM messages_fts f
            JOIN messages m ON m.rowid = f.rowid
@@ -526,7 +548,7 @@ export class Store {
   getMessage(accountId: string, chatJid: string, id: string): StoredMessage | undefined {
     return this.db
       .prepare(
-        `SELECT account_id, chat_jid, id, from_me, sender_jid, sender_name, ts, type, text, media_type, media_path, quoted_id
+        `SELECT ${MESSAGE_COLUMNS}
          FROM messages WHERE account_id = ? AND chat_jid = ? AND id = ?`
       )
       .get(accountId, chatJid, id) as StoredMessage | undefined
@@ -540,6 +562,41 @@ export class Store {
     this.db
       .prepare(`UPDATE messages SET text = NULL, type = 'revoked', media_type = NULL WHERE account_id = ? AND id = ?`)
       .run(accountId, id)
+  }
+
+  /** Store a voice-note transcript in `text` (indexed for search), or mark the attempt as failed. */
+  setTranscript(accountId: string, chatJid: string, id: string, transcript: string | null): void {
+    if (transcript === null) {
+      this.db
+        .prepare('UPDATE messages SET transcribed = -1 WHERE account_id = ? AND chat_jid = ? AND id = ?')
+        .run(accountId, chatJid, id)
+      return
+    }
+    this.db
+      .prepare('UPDATE messages SET text = ?, transcribed = 1 WHERE account_id = ? AND chat_jid = ? AND id = ?')
+      .run(transcript, accountId, chatJid, id)
+  }
+
+  /** Voice notes / audio in chats Claude may read that still lack a transcript, newest first. */
+  untranscribedAudio(opts: { since?: number; limit: number }): { account_id: string; chat_jid: string; id: string }[] {
+    return this.db
+      .prepare(
+        `SELECT m.account_id, m.chat_jid, m.id FROM messages m
+         JOIN chats c ON c.account_id = m.account_id AND c.jid = m.chat_jid
+         WHERE m.media_type IN ('voice', 'audio') AND m.transcribed = 0 AND c.level != 'blocked' AND m.ts >= ?
+         ORDER BY m.ts DESC LIMIT ?`
+      )
+      .all(opts.since ?? 0, opts.limit) as { account_id: string; chat_jid: string; id: string }[]
+  }
+
+  countUntranscribedAudio(): number {
+    const r = this.db
+      .prepare(
+        `SELECT COUNT(*) n FROM messages m JOIN chats c ON c.account_id = m.account_id AND c.jid = m.chat_jid
+         WHERE m.media_type IN ('voice', 'audio') AND m.transcribed = 0 AND c.level != 'blocked'`
+      )
+      .get() as Row
+    return r.n as number
   }
 
   setMediaPath(accountId: string, chatJid: string, id: string, path: string): void {

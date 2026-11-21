@@ -7,11 +7,12 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import pino from 'pino'
-import type { AppSettings, AppState, ApprovalView, ChatQuery, PermissionLevel } from '@shared/types'
+import type { AppSettings, AppState, ApprovalView, ChatQuery, PermissionLevel, WhisperModelId } from '@shared/types'
 import { APP_DIR_NAME, CONNECTION_FILE } from '@shared/tools'
 import { Approvals } from './approvals'
 import { Store } from './db'
 import { McpHttpServer } from './mcp'
+import { Transcriber } from './transcription'
 import { AccountManager } from './whatsapp'
 
 // Fixed data dir so the stdio bridge can find the connection file. ZAP_DATA_DIR is for development/tests.
@@ -30,6 +31,7 @@ const connectionPath = join(dataDir, CONNECTION_FILE)
 let store: Store
 let accounts: AccountManager
 let approvals: Approvals
+let transcriber: Transcriber
 let mcp: McpHttpServer
 let token: string
 let tray: Tray | undefined
@@ -48,6 +50,7 @@ function state(): AppState {
     accounts: accounts.list().map((a) => a.view()),
     settings,
     pendingApprovals: approvals.pendingCount(),
+    whisper: transcriber.status(),
     mcp: {
       running: mcp.running,
       url,
@@ -120,6 +123,15 @@ const STATUS_LABEL: Record<string, string> = {
   logged_out: 'desvinculada'
 }
 
+function whisperMenuLabel(w: AppState['whisper']): string {
+  if (w.state === 'installing' && w.progress) {
+    const pct = w.progress.total ? Math.floor((w.progress.received / w.progress.total) * 100) : 0
+    return `Transcrição de áudio: baixando… ${pct}%`
+  }
+  if (w.state === 'ready') return w.worker.running ? 'Transcrição de áudio: transcrevendo…' : 'Transcrição de áudio: ativa'
+  return 'Transcrição de áudio (Whisper)…'
+}
+
 function rebuildTray(): void {
   if (!tray) return
   const s = state()
@@ -149,6 +161,7 @@ function rebuildTray(): void {
       click: () => showWindow('approvals')
     },
     { label: 'Abrir painel…', accelerator: 'Command+,', click: () => showWindow() },
+    { label: whisperMenuLabel(s.whisper), click: () => showWindow('whisper') },
     {
       label: 'Pausar acesso do Claude',
       type: 'checkbox',
@@ -214,6 +227,7 @@ function registerIpc(): void {
     const after = store.setSettings(patch)
     if (patch.openAtLogin !== undefined) app.setLoginItemSettings({ openAtLogin: after.openAtLogin })
     if (patch.mcpPort !== undefined && patch.mcpPort !== before.mcpPort) await startMcp()
+    if (patch.whisperAuto) transcriber.kick()
     changed()
     return after
   })
@@ -223,6 +237,17 @@ function registerIpc(): void {
   )
   ipcMain.handle('zap:listActivity', () => store.listActivity())
   ipcMain.handle('zap:copy', (_e, text: string) => clipboard.writeText(text))
+  ipcMain.handle('zap:whisperInstall', async (_e, model: WhisperModelId) => {
+    try {
+      await transcriber.install(model)
+      transcriber.kick()
+    } catch {
+      // The error (or a cancel) is reported through transcriber.status().
+    }
+  })
+  ipcMain.handle('zap:whisperCancel', () => transcriber.cancelInstall())
+  ipcMain.handle('zap:whisperRemove', () => transcriber.remove())
+  ipcMain.handle('zap:whisperBackfill', (_e, run: boolean) => transcriber.backfill(run))
   ipcMain.handle('zap:openMcpb', async () => {
     const p = mcpbPath()
     if (p) await shell.openPath(p)
@@ -254,10 +279,15 @@ app.whenReady().then(async () => {
 
   accounts = new AccountManager(store, join(dataDir, 'media'), logger)
   approvals = new Approvals(store)
-  mcp = new McpHttpServer({ store, accounts, approvals, version: app.getVersion() })
+  transcriber = new Transcriber(dataDir, store, accounts)
+  mcp = new McpHttpServer({ store, accounts, approvals, transcriber, version: app.getVersion() })
 
   accounts.on('changed', changed)
-  accounts.on('data', changed)
+  accounts.on('data', () => {
+    changed()
+    transcriber.kick()
+  })
+  transcriber.on('changed', changed)
   approvals.on('changed', changed)
   approvals.on('requested', (a: ApprovalView) => notifyApproval(a))
 

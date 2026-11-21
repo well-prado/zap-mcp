@@ -15,7 +15,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { APP_DIR_NAME, CONNECTION_FILE, SERVER_INSTRUCTIONS, TOOLS, type ToolName } from '../shared/tools'
 
-const VERSION = '0.1.1'
+const VERSION = '0.2.0'
 const connectionFile =
   process.env.ZAP_MCP_CONNECTION ?? join(homedir(), 'Library', 'Application Support', APP_DIR_NAME, CONNECTION_FILE)
 

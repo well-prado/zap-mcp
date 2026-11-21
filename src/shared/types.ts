@@ -59,6 +59,31 @@ export interface ActivityView {
   summary: string
 }
 
+export type WhisperModelId = 'base' | 'large-v3-turbo-q5_0'
+export type WhisperLanguage = 'auto' | 'pt' | 'en' | 'es'
+
+export interface WhisperModelInfo {
+  id: WhisperModelId
+  label: string
+  description: string
+  bytes: number
+}
+
+/** Optional local speech-to-text (whisper.cpp). Nothing is downloaded until the user asks. */
+export interface WhisperStatus {
+  state: 'off' | 'installing' | 'ready' | 'error'
+  /** Installed model (state 'ready') or the one being installed. */
+  model?: WhisperModelId
+  models: WhisperModelInfo[]
+  progress?: { step: 'engine' | 'model'; received: number; total: number }
+  error?: string
+  /** Disk space used by the engine and models. */
+  diskBytes: number
+  /** Voice notes / audio in allowed chats that have no transcript yet. */
+  untranscribed: number
+  worker: { running: boolean; backfill: boolean; done: number; failed: number }
+}
+
 export interface AppSettings {
   newChatPolicy: NewChatPolicy
   /** Kill switch: every MCP tool call fails while paused. */
@@ -66,6 +91,13 @@ export interface AppSettings {
   syncFullHistory: boolean
   openAtLogin: boolean
   mcpPort: number
+  /** Installed Whisper model, or null when transcription is off. */
+  whisperModel: WhisperModelId | null
+  whisperLanguage: WhisperLanguage
+  /** Transcribe new voice notes in allowed chats as they arrive. */
+  whisperAuto: boolean
+  /** Auto-transcription only covers messages from this moment on (older ones: backfill button or on demand). */
+  whisperAutoSince: number
 }
 
 export interface McpInfo {
@@ -83,6 +115,7 @@ export interface AppState {
   settings: AppSettings
   mcp: McpInfo
   pendingApprovals: number
+  whisper: WhisperStatus
 }
 
 export interface ChatQuery {
@@ -105,6 +138,10 @@ export interface ZapApi {
   listActivity(): Promise<ActivityView[]>
   copy(text: string): Promise<void>
   openMcpb(): Promise<string | undefined>
+  whisperInstall(model: WhisperModelId): Promise<void>
+  whisperCancel(): Promise<void>
+  whisperRemove(): Promise<void>
+  whisperBackfill(run: boolean): Promise<void>
   onStateChanged(cb: () => void): () => void
   onNavigate(cb: (tab: string) => void): () => void
 }

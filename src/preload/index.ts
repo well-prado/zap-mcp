@@ -22,6 +22,10 @@ const api: ZapApi = {
   listActivity: () => ipcRenderer.invoke('zap:listActivity'),
   copy: (text) => ipcRenderer.invoke('zap:copy', text),
   openMcpb: () => ipcRenderer.invoke('zap:openMcpb'),
+  whisperInstall: (model) => ipcRenderer.invoke('zap:whisperInstall', model),
+  whisperCancel: () => ipcRenderer.invoke('zap:whisperCancel'),
+  whisperRemove: () => ipcRenderer.invoke('zap:whisperRemove'),
+  whisperBackfill: (run) => ipcRenderer.invoke('zap:whisperBackfill', run),
   onStateChanged: (cb) => listen('zap:state-changed', cb),
   onNavigate: (cb) => listen('zap:navigate', cb)
 }

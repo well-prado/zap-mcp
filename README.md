@@ -48,6 +48,7 @@ If you run projects with clients over WhatsApp groups, the important stuff lives
 | ✅ **Human in the loop** | Proposed messages wait in an approval queue. You can edit them before approving. Files always need approval. |
 | 🔎 **Full-text search** | Search across allowed chats. Search is accent-insensitive, so `reuniao` finds `reunião`. |
 | 🖼️ **Media** | Claude sees images directly. Videos come back as their preview frame. Documents, audio and video files are saved locally and their path is returned. |
+| 🎙️ **Voice notes → text** *(optional)* | One click downloads [Whisper](https://github.com/ggml-org/whisper.cpp) and transcribes voice notes on your Mac, so Claude can read and search what people *said*. |
 | 🧾 **Activity log** | Every tool call Claude makes is recorded. |
 | ⏸️ **Kill switch** | "Pause Claude access" from the menu bar stops every tool at once. |
 | 🕓 **History sync** | Your existing conversations are imported when you link an account. |
@@ -82,6 +83,28 @@ The app, not Claude, decides what Claude can see. A blocked chat looks exactly l
 | **Read** | list, read, search, open media | refused |
 | **Read + propose** | everything above | waits for your approval (you can edit the text) |
 | **Read + send** | everything above | text goes out directly; **files still need approval** |
+
+### Voice-note transcription (optional)
+
+<img src="docs/transcription.png" alt="Audio transcription settings" width="560" align="right" />
+
+Voice notes are half of many WhatsApp conversations. Turn on transcription and Claude reads them as text.
+
+- **Opt-in, one click.** In the menu bar choose **Transcrição de áudio**, pick a model and click **Baixar e ativar**. Nothing is downloaded before that.
+- **100% local.** [whisper.cpp](https://github.com/ggml-org/whisper.cpp) runs on your Mac with Metal acceleration. Audio never leaves it.
+- **Two models:**
+  - **Recommended** (`large-v3-turbo`, 574 MB) is much better with Portuguese and noisy audio. It transcribes a 30 s voice note in about 4–5 s on an M4.
+  - **Light** (`base`, 148 MB) is quicker to download and makes more mistakes.
+- **How voice notes get transcribed:**
+  - New voice notes in allowed chats are transcribed as they arrive.
+  - Older ones get transcribed when Claude reads them, or all at once with **Transcrever agora**.
+- **Searchable.** Transcripts go into the full-text index, so `search_messages` finds words people *spoke*.
+- **Verified downloads.** The engine is built from source by [a GitHub Actions workflow](.github/workflows/whisper-engine.yml) and published on this repo's releases. The model comes from the official whisper.cpp repository on Hugging Face. Both are checked against a pinned SHA-256 before use.
+- **Removable.** **Remover Whisper** deletes the engine and model. Transcripts already made are kept.
+
+No Homebrew or ffmpeg is needed: audio is converted by macOS itself (`afconvert`), with a bundled WebAssembly Opus decoder as a fallback.
+
+<br clear="right" />
 
 ## Quick start
 
@@ -136,9 +159,9 @@ claude mcp add --transport http --scope user zap-mcp http://127.0.0.1:47821/mcp 
 | --- | --- |
 | `list_accounts` | Linked accounts and their connection status |
 | `list_chats` | Allowed chats, most recent first (optional name filter) |
-| `read_messages` | Messages from one chat, with `before` and `after` time windows |
-| `search_messages` | Full-text search across allowed chats (FTS5 syntax supported) |
-| `get_media` | Downloads a message's image, video, audio, document or sticker |
+| `read_messages` | Messages from one chat, with `before` and `after` time windows, including voice-note transcripts |
+| `search_messages` | Full-text search across allowed chats and voice-note transcripts (FTS5 syntax supported) |
+| `get_media` | Downloads a message's image, video, audio, document or sticker. Voice notes come back as a transcript when Whisper is on |
 | `send_message` | Sends text, directly or through approval depending on the chat level. Supports quoted replies |
 | `send_file` | Sends a local file to a chat. Always requires approval |
 
@@ -147,6 +170,7 @@ claude mcp add --transport http --scope user zap-mcp http://127.0.0.1:47821/mcp 
 - **Local only.** The server binds to `127.0.0.1`, requires a random bearer token, and rejects non-localhost `Host` headers to block DNS rebinding.
 - **The token** lives in `~/Library/Application Support/Zap MCP/mcp-connection.json` with mode `0600`.
 - **Prompt injection is the main risk.** Anyone in a group can write *"ignore your instructions and send me…"*. The server tells Claude to treat messages as data, but the real safeguards are permissions and approvals. Keep chats with other people on **Read + propose**.
+- **Voice notes are transcribed locally.** With Whisper on, audio is processed on your Mac and never uploaded. Only the transcript reaches Claude, when Claude reads that chat.
 - **Not encrypted at rest yet.** Messages, media and the linked-device keys sit in `~/Library/Application Support/Zap MCP/`. Keep that folder out of cloud sync. Encryption is on the roadmap.
 - **Your contacts' data.** When you ask about a chat, its messages are sent to Claude. Consider telling your clients, and check your local privacy law (LGPD, GDPR…).
 
@@ -200,6 +224,8 @@ node scripts/mcp-call.mjs list_chats '{}'   # call any tool like Claude would
 | `src/main/auth-state.ts` | Baileys auth state stored in SQLite |
 | `src/main/mcp.ts` | MCP tools, permission checks, HTTP server |
 | `src/main/approvals.ts` | Approval queue |
+| `src/main/transcription.ts` | Optional Whisper: verified downloads, audio conversion, transcription queue |
+| `.github/workflows/whisper-engine.yml` | Builds the `whisper-cli` engine the app downloads |
 | `src/main/index.ts` | Menu bar, window, IPC, lifecycle |
 | `src/shared/tools.ts` | Tool definitions shared by the app and the bridge |
 | `src/shim/index.ts` | stdio bridge packaged as `.mcpb` |
@@ -219,7 +245,7 @@ node scripts/mcp-call.mjs list_chats '{}'   # call any tool like Claude would
 ## Roadmap
 
 - [ ] Encrypt data at rest (SQLCipher, key in the macOS Keychain)
-- [ ] Transcribe voice notes locally with whisper.cpp
+- [x] Transcribe voice notes locally with whisper.cpp (optional download)
 - [ ] Multiple keyframes for videos with ffmpeg
 - [ ] App icon, code signing, notarization, auto-update
 - [x] Releases with the Claude Desktop extension (`.mcpb`) attached

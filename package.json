@@ -1,7 +1,7 @@
 {
   "name": "zap-mcp",
   "productName": "Zap MCP",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "macOS menu bar app that links WhatsApp accounts and exposes the chats you choose to Claude as a local MCP server.",
   "license": "MIT",
   "repository": {
@@ -38,6 +38,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
     "baileys": "7.0.0-rc14",
+    "ogg-opus-decoder": "1.7.5",
     "pino": "10.4.0",
     "qrcode": "1.5.4",
     "sharp": "0.35.5",

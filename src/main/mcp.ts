@@ -14,16 +14,24 @@ import type { ChatView } from '@shared/types'
 import { SERVER_INSTRUCTIONS, TOOLS, type ToolArgs, type ToolName } from '@shared/tools'
 import type { Approvals } from './approvals'
 import type { Store, StoredMessage } from './db'
+import type { Transcriber } from './transcription'
 import { mimeForPath, type Account, type AccountManager } from './whatsapp'
 
 const APPROVAL_WAIT_MS = 50_000
 const MAX_IMAGE_BYTES = 3_500_000
 const MAX_FILE_BYTES = 100 * 1024 * 1024
+/** read_messages transcribes at most this many voice notes on the fly, within this time. */
+const INLINE_TRANSCRIBE_MAX = 6
+const INLINE_TRANSCRIBE_BUDGET_MS = 30_000
+const isAudio = (t: string | null) => t === 'voice' || t === 'audio'
+const WHISPER_OFF_NOTE =
+  'Transcrição de áudio desligada. O usuário pode ativar o Whisper no app Zap MCP (menu ⚡ → Transcrição de áudio).'
 
 export interface McpContext {
   store: Store
   accounts: AccountManager
   approvals: Approvals
+  transcriber: Transcriber
   version: string
 }
 
@@ -37,7 +45,7 @@ function formatMessage(m: StoredMessage) {
     id: m.id,
     at: new Date(m.ts).toISOString(),
     from: m.from_me ? 'me' : (m.sender_name ?? m.sender_jid ?? 'unknown'),
-    ...(m.text ? { text: m.text } : {}),
+    ...(m.text ? (m.transcribed === 1 ? { transcript: m.text } : { text: m.text }) : {}),
     ...(m.media_type ? { media: m.media_type } : {}),
     ...(m.type === 'revoked' ? { deleted: true } : {}),
     ...(m.quoted_id ? { reply_to: m.quoted_id } : {})
@@ -112,11 +120,31 @@ export function buildMcpServer(ctx: McpContext): McpServer {
     read_messages: async ({ chat_jid, account_id, limit, before, after }) => {
       const account = pickAccount(account_id, chat_jid)
       const chat = allowedChat(account, chat_jid)
-      const msgs = store.listMessages(account.id, chat.jid, {
-        limit,
-        before: parseDate(before, 'before'),
-        after: parseDate(after, 'after')
-      })
+      const range = { limit, before: parseDate(before, 'before'), after: parseDate(after, 'after') }
+      let msgs = store.listMessages(account.id, chat.jid, range)
+
+      // Voice notes without a transcript: transcribe the most recent few now, if Whisper is on.
+      const pending = msgs.filter((m) => isAudio(m.media_type) && m.transcribed === 0).reverse()
+      let skipped = pending.length
+      if (ctx.transcriber.ready && pending.length) {
+        const deadline = Date.now() + INLINE_TRANSCRIBE_BUDGET_MS
+        for (const m of pending.slice(0, INLINE_TRANSCRIBE_MAX)) {
+          if (Date.now() > deadline) break
+          try {
+            await ctx.transcriber.transcribeMessage(account.id, chat.jid, m.id)
+          } catch {
+            // Marked as failed; get_media can retry it.
+          }
+          skipped--
+        }
+        msgs = store.listMessages(account.id, chat.jid, range)
+      }
+      const audioNote = !skipped
+        ? undefined
+        : ctx.transcriber.ready
+          ? `${skipped} áudio(s) ainda sem transcrição: use get_media com o id para transcrever.`
+          : WHISPER_OFF_NOTE
+
       store.logActivity({
         tool: 'read_messages',
         accountId: account.id,
@@ -126,7 +154,8 @@ export function buildMcpServer(ctx: McpContext): McpServer {
       return json({
         account_id: account.id,
         chat: { chat_jid: chat.jid, name: chat.name, type: chat.isGroup ? 'group' : 'direct', permission: chat.level },
-        messages: msgs.map(formatMessage)
+        messages: msgs.map(formatMessage),
+        ...(audioNote ? { note: audioNote } : {})
       })
     },
 
@@ -154,7 +183,22 @@ export function buildMcpServer(ctx: McpContext): McpServer {
         summary: `Abriu ${msg.media_type} de "${chat.name}"`
       })
 
+      let transcript: string | undefined
+      let transcriptNote: string | undefined
+      if (isAudio(msg.media_type)) {
+        if (ctx.transcriber.ready || msg.transcribed === 1) {
+          try {
+            transcript = await ctx.transcriber.transcribeMessage(account.id, chat.jid, message_id)
+          } catch (err) {
+            transcriptNote = `Não foi possível transcrever: ${err instanceof Error ? err.message : String(err)}`
+          }
+        } else {
+          transcriptNote = WHISPER_OFF_NOTE
+        }
+      }
+
       const content: CallToolResult['content'] = []
+      if (transcript !== undefined) content.push({ type: 'text', text: `Transcrição do áudio: ${transcript}` })
       if (media.mimetype.startsWith('image/') && msg.media_type !== 'sticker') {
         const img = await asSendableImage(await readFile(media.path), media.mimetype)
         if (img) content.push({ type: 'image', data: img.data.toString('base64'), mimeType: img.mimeType })
@@ -177,7 +221,7 @@ export function buildMcpServer(ctx: McpContext): McpServer {
           note:
             msg.media_type === 'video' || msg.media_type === 'video_note'
               ? 'A imagem acima é o quadro de prévia do vídeo; o arquivo completo está em saved_to.'
-              : undefined
+              : transcriptNote
         })
       })
       return { content }
