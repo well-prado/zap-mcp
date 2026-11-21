@@ -82,6 +82,10 @@ export interface WhisperStatus {
   /** Voice notes / audio in allowed chats that have no transcript yet. */
   untranscribed: number
   worker: { running: boolean; backfill: boolean; done: number; failed: number }
+  /** An engine build exists for this OS/CPU (macOS arm64, Windows x64, Linux x64). */
+  supported: boolean
+  /** Runs on the GPU (Metal on macOS) rather than the CPU. */
+  gpu: boolean
 }
 
 export interface AppSettings {
@@ -116,6 +120,8 @@ export interface AppState {
   mcp: McpInfo
   pendingApprovals: number
   whisper: WhisperStatus
+  /** process.platform of the computer running the app. */
+  platform: string
 }
 
 export interface ChatQuery {

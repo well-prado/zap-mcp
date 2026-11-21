@@ -3,10 +3,10 @@
  *
  * Nothing is downloaded until the user turns it on. Then the app fetches two things into
  * <data dir>/whisper, each checked against a pinned SHA-256:
- *   - the engine: whisper.cpp's `whisper-cli`, built by .github/workflows/whisper-engine.yml
+ *   - the engine: whisper.cpp's `whisper-cli` for this OS, built by .github/workflows/whisper-engine.yml
  *   - a model from the official whisper.cpp repository on Hugging Face
- * Audio is converted to 16 kHz mono WAV with macOS's built-in `afconvert`, falling back to a
- * bundled WebAssembly Opus decoder for WhatsApp's OGG voice notes.
+ * WhatsApp voice notes (OGG/Opus) are decoded by a bundled WebAssembly decoder; on macOS other
+ * formats go through the built-in `afconvert`, elsewhere whisper-cli reads WAV/MP3/FLAC itself.
  */
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -21,11 +21,23 @@ import type { WhisperModelId, WhisperModelInfo, WhisperStatus } from '@shared/ty
 import type { Store } from './db'
 import type { AccountManager } from './whatsapp'
 
-export const WHISPER_ENGINE = {
-  version: 'v1.9.5',
-  url: 'https://github.com/well-prado/zap-mcp/releases/download/whisper-engine-v1.9.5/whisper-cli-v1.9.5-macos-arm64.tar.gz',
-  sha256: 'b28a23076e2e3dc0a6c9cab230a3e1047cea3a10fed83cf0f15f4a47b7b85099',
-  bytes: 2_091_936
+type EngineTarget = 'macos-arm64' | 'linux-x64' | 'windows-x64'
+
+const ENGINE_VERSION = 'v1.9.5'
+const ENGINE_BASE = `https://github.com/well-prado/zap-mcp/releases/download/whisper-engine-${ENGINE_VERSION}`
+
+/** Engine builds published by the whisper-engine workflow, pinned by SHA-256 and size. */
+export const WHISPER_ENGINES: Record<EngineTarget, { sha256: string; bytes: number }> = {
+  'macos-arm64': { sha256: 'b28a23076e2e3dc0a6c9cab230a3e1047cea3a10fed83cf0f15f4a47b7b85099', bytes: 2_091_936 },
+  'linux-x64': { sha256: 'a2ad83ad9ebad4c4d2e0a3419768cff60a138a316d59dc5310e155de9a1e60ea', bytes: 1_771_260 },
+  'windows-x64': { sha256: 'fdf8bb1c6260b676d22596613559d2ef784349ac785497e335fc47f991193b05', bytes: 859_880 }
+}
+
+function engineTarget(): EngineTarget | undefined {
+  if (process.platform === 'darwin' && process.arch === 'arm64') return 'macos-arm64'
+  if (process.platform === 'linux' && process.arch === 'x64') return 'linux-x64'
+  if (process.platform === 'win32' && process.arch === 'x64') return 'windows-x64'
+  return undefined
 }
 
 const HF = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main'
@@ -136,18 +148,28 @@ export async function oggOpusToWav(input: string, output: string): Promise<void>
   }
 }
 
-/** Anything macOS can read → 16 kHz mono WAV. Uses afconvert, then the bundled Opus decoder. */
-export async function toWav16k(input: string, output: string): Promise<void> {
-  try {
-    await run('/usr/bin/afconvert', ['-f', 'WAVE', '-d', 'LEI16@16000', '-c', '1', input, output], 120_000)
-    if (statSync(output).size > 44) return
-  } catch {
-    // Some macOS versions cannot open OGG; WhatsApp voice notes are OGG/Opus.
+const OGG = ['.ogg', '.opus', '.oga']
+/** Formats whisper-cli decodes itself (miniaudio). */
+const NATIVE = ['.wav', '.mp3', '.flac']
+
+/** Path of an audio file whisper-cli can read: a 16 kHz mono WAV made in `tmp`, or `input` itself. */
+export async function prepareAudio(input: string, tmp: string): Promise<string> {
+  const wav = join(tmp, 'audio.wav')
+  const ext = extname(input).toLowerCase()
+  if (process.platform === 'darwin') {
+    try {
+      await run('/usr/bin/afconvert', ['-f', 'WAVE', '-d', 'LEI16@16000', '-c', '1', input, wav], 120_000)
+      if (statSync(wav).size > 44) return wav
+    } catch {
+      // Some macOS versions cannot open OGG; the decoder below handles WhatsApp voice notes.
+    }
   }
-  if (!['.ogg', '.opus', '.oga'].includes(extname(input).toLowerCase())) {
-    throw new Error('Não consegui converter este áudio para transcrição.')
+  if (OGG.includes(ext)) {
+    await oggOpusToWav(input, wav)
+    return wav
   }
-  await oggOpusToWav(input, output)
+  if (NATIVE.includes(ext)) return input
+  throw new Error(`Formato de áudio ${ext || 'desconhecido'} não suportado para transcrição neste sistema.`)
 }
 
 export class Transcriber extends EventEmitter {
@@ -168,7 +190,7 @@ export class Transcriber extends EventEmitter {
   ) {
     super()
     this.dir = join(dataDir, 'whisper')
-    this.bin = join(this.dir, 'bin', 'whisper-cli')
+    this.bin = join(this.dir, 'bin', process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli')
   }
 
   private modelPath(id: WhisperModelId): string {
@@ -177,7 +199,7 @@ export class Transcriber extends EventEmitter {
 
   private engineInstalled(): boolean {
     try {
-      return existsSync(this.bin) && readFileSync(join(this.dir, 'bin', 'VERSION'), 'utf8').trim() === WHISPER_ENGINE.version
+      return existsSync(this.bin) && readFileSync(join(this.dir, 'bin', 'VERSION'), 'utf8').trim() === ENGINE_VERSION
     } catch {
       return false
     }
@@ -210,7 +232,9 @@ export class Transcriber extends EventEmitter {
       error: this.error,
       diskBytes: this.diskBytes(),
       untranscribed: this.store.countUntranscribedAudio(),
-      worker: { running: this.worker.running, backfill: this.worker.backfill, done: this.worker.done, failed: this.worker.failed }
+      worker: { running: this.worker.running, backfill: this.worker.backfill, done: this.worker.done, failed: this.worker.failed },
+      supported: !!engineTarget(),
+      gpu: engineTarget() === 'macos-arm64'
     }
   }
 
@@ -224,6 +248,8 @@ export class Transcriber extends EventEmitter {
   /** Download the engine (if needed) and `model`, then switch to it. */
   async install(model: WhisperModelId): Promise<void> {
     if (this.installing) throw new Error('Já existe uma instalação em andamento.')
+    const target = engineTarget()
+    if (!target) throw new Error(`Ainda não há motor do Whisper para ${process.platform} ${process.arch}.`)
     const abort = new AbortController()
     this.installing = { model, abort }
     this.error = undefined
@@ -234,14 +260,16 @@ export class Transcriber extends EventEmitter {
 
       if (!this.engineInstalled()) {
         const archive = join(this.dir, 'engine.tar.gz')
-        await download(WHISPER_ENGINE.url, archive, WHISPER_ENGINE, abort.signal, (received, total) => {
+        const url = `${ENGINE_BASE}/whisper-cli-${ENGINE_VERSION}-${target}.tar.gz`
+        await download(url, archive, WHISPER_ENGINES[target], abort.signal, (received, total) => {
           this.progress = { step: 'engine', received, total }
           this.changed(true)
         })
-        await run('/usr/bin/tar', ['-xzf', archive, '-C', join(this.dir, 'bin')], 60_000)
+        // bsdtar ships with macOS and Windows 10+ (System32\tar.exe); GNU tar with Linux.
+        await run(process.platform === 'darwin' ? '/usr/bin/tar' : 'tar', ['-xzf', archive, '-C', join(this.dir, 'bin')], 60_000)
         await rm(archive, { force: true })
-        await chmod(this.bin, 0o755)
-        writeFileSync(join(this.dir, 'bin', 'VERSION'), WHISPER_ENGINE.version)
+        if (process.platform !== 'win32') await chmod(this.bin, 0o755)
+        writeFileSync(join(this.dir, 'bin', 'VERSION'), ENGINE_VERSION)
       }
 
       const info = WHISPER_MODELS[model]
@@ -300,14 +328,13 @@ export class Transcriber extends EventEmitter {
     if (!this.ready || !settings.whisperModel) throw new Error('A transcrição (Whisper) não está instalada no app Zap MCP.')
     const tmp = await mkdtemp(join(tmpdir(), 'zap-whisper-'))
     try {
-      const wav = join(tmp, 'audio.wav')
-      await toWav16k(path, wav)
+      const audio = await prepareAudio(path, tmp)
       const threads = String(Math.max(2, Math.min(8, cpus().length - 2)))
       // Keep timestamps on (no `-nt`): whisper's no-timestamp decoding mode drops whole sentences.
       // They are stripped from each "[00:00:00.000 --> 00:00:09.140]   text" line below.
       const { stdout } = await run(
         this.bin,
-        ['-m', this.modelPath(settings.whisperModel), '-f', wav, '-l', settings.whisperLanguage, '-t', threads, '-np'],
+        ['-m', this.modelPath(settings.whisperModel), '-f', audio, '-l', settings.whisperLanguage, '-t', threads, '-np'],
         10 * 60_000
       )
       return stdout

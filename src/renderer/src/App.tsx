@@ -156,7 +156,7 @@ function Accounts({ state }: { state: AppState }) {
                 <button
                   className="danger"
                   onClick={() => {
-                    if (confirm(`Remover "${a.label}"? Este Mac será desvinculado e o histórico local apagado.`)) {
+                    if (confirm(`Remover "${a.label}"? Este computador será desvinculado e o histórico local apagado.`)) {
                       void zap.removeAccount(a.id)
                     }
                   }}
@@ -448,7 +448,9 @@ function Claude({ state }: { state: AppState }) {
         <div className="card">
           <div className="title">Claude Desktop</div>
           <p className="sub">Instale a extensão uma vez. Ela só repassa os pedidos do Claude para este app.</p>
-          {state.mcp.mcpbPath ? (
+          {state.platform === 'linux' ? (
+            <p className="fine">O Claude Desktop não tem versão para Linux. Use o Claude Code (ao lado).</p>
+          ) : state.mcp.mcpbPath ? (
             <button className="primary" onClick={() => zap.openMcpb()}>
               Instalar extensão no Claude Desktop
             </button>
@@ -461,7 +463,7 @@ function Claude({ state }: { state: AppState }) {
 
         <div className="card">
           <div className="title">Claude Code</div>
-          <p className="sub">Rode no terminal (contém o token de acesso deste Mac):</p>
+          <p className="sub">Rode no terminal (contém o token de acesso deste computador):</p>
           <pre className="cmd">{state.mcp.claudeCodeCommand.replace(/Bearer \w+/, 'Bearer ••••••')}</pre>
           <button onClick={() => copy('cc', state.mcp.claudeCodeCommand)}>
             {copied === 'cc' ? 'Copiado!' : 'Copiar comando'}
@@ -485,14 +487,16 @@ function Claude({ state }: { state: AppState }) {
             />
             Baixar o histórico completo ao vincular uma conta
           </label>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={s.openAtLogin}
-              onChange={(e) => void zap.setSettings({ openAtLogin: e.target.checked })}
-            />
-            Abrir junto com o Mac
-          </label>
+          {state.platform !== 'linux' && (
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={s.openAtLogin}
+                onChange={(e) => void zap.setSettings({ openAtLogin: e.target.checked })}
+              />
+              Abrir ao ligar o computador (fica só na {state.platform === 'darwin' ? 'barra de menus' : 'bandeja do sistema'})
+            </label>
+          )}
           <div className="row">
             <label>
               Porta{' '}
@@ -533,7 +537,7 @@ function Whisper({ state }: { state: AppState }) {
         <h1>Transcrição de áudio</h1>
         <p>
           Transforma os áudios do WhatsApp em texto, para o Claude ler, resumir e encontrar na busca. Tudo roda neste
-          Mac com o Whisper (whisper.cpp): nenhum áudio sai do seu computador. É opcional e nada é baixado até você
+          computador com o Whisper (whisper.cpp): nenhum áudio sai daqui. É opcional e nada é baixado até você
           ativar.
         </p>
       </header>
@@ -558,7 +562,17 @@ function Whisper({ state }: { state: AppState }) {
 
       {w.state === 'installing' && !w.progress && <div className="card sub">Preparando o download…</div>}
 
-      {(w.state === 'off' || w.state === 'error') && (
+      {!w.supported && (
+        <div className="card">
+          <div className="title">Ainda não disponível neste computador</div>
+          <p className="sub">
+            Há versões do Whisper para Mac com Apple Silicon, Windows x64 e Linux x64. Este sistema ({state.platform})
+            ainda não tem uma.
+          </p>
+        </div>
+      )}
+
+      {w.supported && (w.state === 'off' || w.state === 'error') && (
         <div className="card">
           <div className="title">Escolha o modelo</div>
           <div className="models">
@@ -580,7 +594,12 @@ function Whisper({ state }: { state: AppState }) {
               Baixar e ativar ({fmtBytes(picked.bytes + 2_000_000)})
             </button>
           </div>
-          <p className="fine">Precisa de um Mac com Apple Silicon (M1 ou mais novo). Você pode remover tudo depois.</p>
+          <p className="fine">
+            {w.gpu
+              ? 'Usa a GPU do Mac (Metal): um áudio de 30 s fica pronto em poucos segundos.'
+              : 'Roda no processador (sem GPU), então é mais lento que num Mac. Se ficar lento, use o modelo Leve.'}{' '}
+            Você pode remover tudo depois.
+          </p>
         </div>
       )}
 

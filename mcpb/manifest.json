@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "zap-mcp",
   "display_name": "Zap MCP (WhatsApp)",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Read and reply to the WhatsApp chats you allowed in the Zap MCP Mac app.",
-  "long_description": "Bridge to the Zap MCP menu bar app. The app links your WhatsApp accounts and decides which chats Claude can see and whether it may send; this extension only forwards Claude's requests to it. The tools work only while the app is running on this Mac.",
+  "long_description": "Bridge to the Zap MCP menu bar app. The app links your WhatsApp accounts and decides which chats Claude can see and whether it may send; this extension only forwards Claude's requests to it. The tools work only while the app is running on this computer.",
   "author": {
     "name": "Zap MCP contributors"
   },
@@ -62,7 +62,8 @@
   ],
   "compatibility": {
     "platforms": [
-      "darwin"
+      "darwin",
+      "win32"
     ],
     "runtimes": {
       "node": ">=20.0.0"

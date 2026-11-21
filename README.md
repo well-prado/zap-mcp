@@ -6,10 +6,10 @@
 
 **Let Claude read, search and reply to your WhatsApp chats: only the ones you choose, only while your Mac is on.**
 
-A macOS menu bar app that links your WhatsApp accounts and turns them into a local [MCP](https://modelcontextprotocol.io) server for Claude Desktop and Claude Code.
+A menu bar / system tray app for **macOS, Windows and Linux** that links your WhatsApp accounts and turns them into a local [MCP](https://modelcontextprotocol.io) server for Claude Desktop and Claude Code.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple)
+![Platforms: macOS · Windows · Linux](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-lightgrey)
 ![Electron](https://img.shields.io/badge/Electron-45-47848F?logo=electron&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP%20%2B%20stdio-8A2BE2)
@@ -60,7 +60,7 @@ If you run projects with clients over WhatsApp groups, the important stuff lives
 flowchart LR
   phone["📱 WhatsApp on your phone"] -- "linked device<br/>(no browser)" --> app
 
-  subgraph app["Zap MCP.app · menu bar"]
+  subgraph app["Zap MCP · menu bar / tray"]
     direction TB
     wa["Baileys socket<br/>per account"] --> db[("SQLite + FTS5<br/>messages · media")]
     db --> perm{"Permission<br/>engine"}
@@ -91,7 +91,7 @@ The app, not Claude, decides what Claude can see. A blocked chat looks exactly l
 Voice notes are half of many WhatsApp conversations. Turn on transcription and Claude reads them as text.
 
 - **Opt-in, one click.** In the menu bar choose **Transcrição de áudio**, pick a model and click **Baixar e ativar**. Nothing is downloaded before that.
-- **100% local.** [whisper.cpp](https://github.com/ggml-org/whisper.cpp) runs on your Mac with Metal acceleration. Audio never leaves it.
+- **100% local.** [whisper.cpp](https://github.com/ggml-org/whisper.cpp) runs on your computer: on the GPU (Metal) on Apple Silicon Macs, on the CPU on Windows and Linux x64. Audio never leaves it.
 - **Two models:**
   - **Recommended** (`large-v3-turbo`, 574 MB) is much better with Portuguese and noisy audio. It transcribes a 30 s voice note in about 4–5 s on an M4.
   - **Light** (`base`, 148 MB) is quicker to download and makes more mistakes.
@@ -102,13 +102,30 @@ Voice notes are half of many WhatsApp conversations. Turn on transcription and C
 - **Verified downloads.** The engine is built from source by [a GitHub Actions workflow](.github/workflows/whisper-engine.yml) and published on this repo's releases. The model comes from the official whisper.cpp repository on Hugging Face. Both are checked against a pinned SHA-256 before use.
 - **Removable.** **Remover Whisper** deletes the engine and model. Transcripts already made are kept.
 
-No Homebrew or ffmpeg is needed: audio is converted by macOS itself (`afconvert`), with a bundled WebAssembly Opus decoder as a fallback.
+No Homebrew or ffmpeg is needed. WhatsApp voice notes are decoded by a bundled WebAssembly Opus decoder, and on macOS other formats go through the built-in `afconvert`.
 
 <br clear="right" />
 
-## Quick start
+## Install
 
-**Requirements:** macOS 13+, Node.js 22.12+, and a WhatsApp account on a phone.
+Download the build for your system from the [latest release](https://github.com/well-prado/zap-mcp/releases):
+
+| System | File | First launch |
+| --- | --- | --- |
+| **macOS** (Apple Silicon) | `zap-mcp-<version>-mac-arm64.dmg` | Not notarized yet. If macOS blocks it, open **System Settings → Privacy & Security → Open Anyway**, or run `xattr -dr com.apple.quarantine "/Applications/Zap MCP.app"`. |
+| **Windows** (x64) | `zap-mcp-<version>-windows-x64-setup.exe` (or the portable `.zip`) | Not code-signed yet. On "Windows protected your PC" click **More info → Run anyway**. |
+| **Linux** (x64) | `zap-mcp-<version>-linux-x86_64.AppImage` or `zap-mcp-<version>-linux-amd64.deb` | AppImage: `chmod +x` it and run. Debian/Ubuntu: `sudo apt install ./zap-mcp-<version>-linux-amd64.deb`. On GNOME, the tray icon needs the *AppIndicator* extension. |
+
+Then:
+
+1. Click the ⚡ icon in the menu bar (macOS) or system tray (Windows/Linux) and choose **Open panel…**.
+2. Under **Accounts**, click **Generate QR code**. On your phone, open WhatsApp → **Linked devices** → **Link a device** and scan it.
+3. Under **Chats & permissions**, allow the chats you want Claude to see.
+4. Connect Claude (below).
+
+### Run from source
+
+**Requirements:** Node.js 22.12+ on macOS, Windows or Linux.
 
 ```bash
 git clone https://github.com/well-prado/zap-mcp.git
@@ -117,14 +134,9 @@ npm install
 npm run dev
 ```
 
-The first run downloads Electron. Then:
+The first run downloads Electron.
 
-1. Click the ⚡ icon in the menu bar and choose **Open panel…**.
-2. Under **Accounts**, click **Generate QR code**. On your phone, open WhatsApp → **Linked devices** → **Link a device** and scan it.
-3. Under **Chats & permissions**, allow the chats you want Claude to see.
-4. Connect Claude (below).
-
-### Claude Desktop
+### Claude Desktop (macOS and Windows)
 
 Download **`zap-mcp-<version>.mcpb`** from the [latest release](https://github.com/well-prado/zap-mcp/releases), or build it yourself:
 
@@ -168,10 +180,13 @@ claude mcp add --transport http --scope user zap-mcp http://127.0.0.1:47821/mcp 
 ## Security & privacy
 
 - **Local only.** The server binds to `127.0.0.1`, requires a random bearer token, and rejects non-localhost `Host` headers to block DNS rebinding.
-- **The token** lives in `~/Library/Application Support/Zap MCP/mcp-connection.json` with mode `0600`.
+- **The token** lives in `mcp-connection.json` in the app's data folder (owner-only permissions on macOS/Linux):
+  - macOS: `~/Library/Application Support/Zap MCP/`
+  - Windows: `%APPDATA%\Zap MCP\`
+  - Linux: `~/.config/Zap MCP/`
 - **Prompt injection is the main risk.** Anyone in a group can write *"ignore your instructions and send me…"*. The server tells Claude to treat messages as data, but the real safeguards are permissions and approvals. Keep chats with other people on **Read + propose**.
 - **Voice notes are transcribed locally.** With Whisper on, audio is processed on your Mac and never uploaded. Only the transcript reaches Claude, when Claude reads that chat.
-- **Not encrypted at rest yet.** Messages, media and the linked-device keys sit in `~/Library/Application Support/Zap MCP/`. Keep that folder out of cloud sync. Encryption is on the roadmap.
+- **Not encrypted at rest yet.** Messages, media and the linked-device keys sit in that data folder. Keep that folder out of cloud sync. Encryption is on the roadmap.
 - **Your contacts' data.** When you ask about a chat, its messages are sent to Claude. Consider telling your clients, and check your local privacy law (LGPD, GDPR…).
 
 ## FAQ
@@ -213,7 +228,8 @@ npm run dev          # Electron + Vite with hot reload
 npm run typecheck    # tsc (strict)
 npm run build        # main, preload, renderer + stdio bridge
 npm run pack:mcpb    # Claude Desktop extension → zap-mcp.mcpb
-npm run dist:mac     # .dmg / .zip in dist/ (needs a Developer ID to sign)
+npm run dist:mac     # .dmg / .zip in dist/ (Windows/Linux: npx electron-builder --win / --linux)
+node scripts/smoke-test.mjs <app executable>   # launch a packaged build and check its MCP server
 node scripts/mcp-call.mjs list_chats '{}'   # call any tool like Claude would
 ```
 
@@ -247,9 +263,10 @@ node scripts/mcp-call.mjs list_chats '{}'   # call any tool like Claude would
 - [ ] Encrypt data at rest (SQLCipher, key in the macOS Keychain)
 - [x] Transcribe voice notes locally with whisper.cpp (optional download)
 - [ ] Multiple keyframes for videos with ffmpeg
-- [ ] App icon, code signing, notarization, auto-update
+- [x] App icon
+- [x] Builds for macOS, Windows and Linux, smoke-tested in CI ([release workflow](.github/workflows/release.yml))
+- [ ] Code signing (Apple notarization, Windows Authenticode) and auto-update
 - [x] Releases with the Claude Desktop extension (`.mcpb`) attached
-- [ ] Signed and notarized `.app` / `.dmg` in releases
 - [ ] English UI (currently pt-BR) and i18n
 - [ ] Reactions and polls as structured data
 - [ ] Optional authenticated tunnel for Claude on web and mobile

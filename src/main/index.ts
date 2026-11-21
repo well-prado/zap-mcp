@@ -1,6 +1,6 @@
 /**
- * Zap MCP — menu bar app. Owns the WhatsApp connections and the MCP server; the MCP server
- * exists only while this app runs, which is what makes "the Mac is the server" true.
+ * Zap MCP — menu bar / system tray app. Owns the WhatsApp connections and the MCP server; the
+ * MCP server exists only while this app runs, which is what makes "your computer is the server" true.
  */
 import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, Notification, shell, Tray } from 'electron'
 import { randomBytes } from 'node:crypto'
@@ -27,6 +27,9 @@ if (!app.requestSingleInstanceLock()) {
 
 const logger = pino({ level: process.env.ZAP_LOG_LEVEL ?? 'warn' }, pino.destination(join(dataDir, 'logs', 'whatsapp.log')))
 const connectionPath = join(dataDir, CONNECTION_FILE)
+const isMac = process.platform === 'darwin'
+/** Windows login items get this flag so a login launch stays in the tray. */
+const HIDDEN_ARG = '--hidden'
 
 let store: Store
 let accounts: AccountManager
@@ -45,16 +48,17 @@ function mcpbPath(): string | undefined {
 
 function state(): AppState {
   const settings = store.getSettings()
-  const url = `http://127.0.0.1:${settings.mcpPort}/mcp`
+  const url = `http://127.0.0.1:${mcpPort()}/mcp`
   return {
     accounts: accounts.list().map((a) => a.view()),
     settings,
     pendingApprovals: approvals.pendingCount(),
     whisper: transcriber.status(),
+    platform: process.platform,
     mcp: {
       running: mcp.running,
       url,
-      port: settings.mcpPort,
+      port: mcpPort(),
       error: mcp.error,
       configPath: connectionPath,
       mcpbPath: mcpbPath(),
@@ -63,11 +67,16 @@ function state(): AppState {
   }
 }
 
+/** The settings port, unless ZAP_MCP_PORT overrides it (tests running next to an installed copy). */
+function mcpPort(): number {
+  return Number(process.env.ZAP_MCP_PORT) || store.getSettings().mcpPort
+}
+
 async function startMcp(): Promise<void> {
-  const { mcpPort } = store.getSettings()
-  await mcp.start(mcpPort, token)
+  const port = mcpPort()
+  await mcp.start(port, token)
   if (mcp.running) {
-    writeFileSync(connectionPath, JSON.stringify({ url: `http://127.0.0.1:${mcpPort}/mcp`, token }, null, 2), { mode: 0o600 })
+    writeFileSync(connectionPath, JSON.stringify({ url: `http://127.0.0.1:${port}/mcp`, token }, null, 2), { mode: 0o600 })
   }
 }
 
@@ -82,7 +91,8 @@ function showWindow(tab?: string): void {
       minHeight: 520,
       show: false,
       title: 'Zap MCP',
-      titleBarStyle: 'hiddenInset',
+      // macOS: content under the traffic lights. Windows/Linux: native frame, no menu bar.
+      ...(isMac ? { titleBarStyle: 'hiddenInset' as const } : { autoHideMenuBar: true }),
       webPreferences: {
         preload: join(import.meta.dirname, '../preload/index.cjs'),
         contextIsolation: true,
@@ -160,7 +170,7 @@ function rebuildTray(): void {
       enabled: pending > 0,
       click: () => showWindow('approvals')
     },
-    { label: 'Abrir painel…', accelerator: 'Command+,', click: () => showWindow() },
+    { label: 'Abrir painel…', accelerator: 'CommandOrControl+,', click: () => showWindow() },
     { label: whisperMenuLabel(s.whisper), click: () => showWindow('whisper') },
     {
       label: 'Pausar acesso do Claude',
@@ -172,15 +182,18 @@ function rebuildTray(): void {
       }
     },
     { type: 'separator' },
-    { label: 'Sair do Zap MCP', accelerator: 'Command+Q', click: () => app.quit() }
+    { label: 'Sair do Zap MCP', accelerator: 'CommandOrControl+Q', click: () => app.quit() }
   ])
   tray.setContextMenu(menu)
 }
 
 function createTray(): void {
-  const icon = nativeImage.createFromPath(join(app.getAppPath(), 'resources', 'trayTemplate.png'))
-  icon.setTemplateImage(true)
+  // macOS tints a black template image for light/dark menu bars; other OSes get the color icon.
+  const icon = nativeImage.createFromPath(join(app.getAppPath(), 'resources', isMac ? 'trayTemplate.png' : 'tray.png'))
+  if (isMac) icon.setTemplateImage(true)
   tray = new Tray(icon)
+  // Windows opens tray menus on right-click; a left-click should open the panel.
+  if (process.platform === 'win32') tray.on('click', () => showWindow())
   rebuildTray()
 }
 
@@ -225,7 +238,9 @@ function registerIpc(): void {
   ipcMain.handle('zap:setSettings', async (_e, patch: Partial<AppSettings>) => {
     const before = store.getSettings()
     const after = store.setSettings(patch)
-    if (patch.openAtLogin !== undefined) app.setLoginItemSettings({ openAtLogin: after.openAtLogin })
+    if (patch.openAtLogin !== undefined) {
+      app.setLoginItemSettings({ openAtLogin: after.openAtLogin, args: isMac ? undefined : [HIDDEN_ARG] })
+    }
     if (patch.mcpPort !== undefined && patch.mcpPort !== before.mcpPort) await startMcp()
     if (patch.whisperAuto) transcriber.kick()
     changed()
@@ -271,6 +286,8 @@ app.on('before-quit', () => {
 
 app.whenReady().then(async () => {
   app.dock?.hide()
+  // Windows shows toast notifications only for apps with an AppUserModelID (the installer's appId).
+  if (process.platform === 'win32') app.setAppUserModelId('dev.zapmcp.app')
 
   store = new Store(join(dataDir, 'zap.db'))
   store.expireStaleApprovals()
@@ -297,7 +314,7 @@ app.whenReady().then(async () => {
   changed()
 
   // Opened by hand (Applications, Spotlight): show the panel. Opened at login: stay quietly in the menu bar.
-  const openedAtLogin = app.getLoginItemSettings().wasOpenedAtLogin
+  const openedAtLogin = (isMac && app.getLoginItemSettings().wasOpenedAtLogin) || process.argv.includes(HIDDEN_ARG)
   if (!openedAtLogin || !accounts.list().length || process.env.ZAP_SHOW_WINDOW) showWindow()
 
   await accounts.startAll()

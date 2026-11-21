@@ -210,7 +210,7 @@ export class Account extends EventEmitter {
 
         if (code === DisconnectReason.loggedOut) {
           this.store.clearAuth(this.id)
-          return this.setStatus('logged_out', 'Este Mac foi desconectado pelo celular. Conecte de novo com o QR code.')
+          return this.setStatus('logged_out', 'Este computador foi desconectado pelo celular. Conecte de novo com o QR code.')
         }
         if (code === DisconnectReason.connectionReplaced) {
           return this.setStatus('disconnected', 'Outra sessão do Zap MCP assumiu esta conta.')
@@ -520,7 +520,7 @@ export class Account extends EventEmitter {
     this.setStatus('disconnected')
   }
 
-  /** Unlink this Mac from the phone and forget the session. */
+  /** Unlink this computer from the phone and forget the session. */
   async logout(): Promise<void> {
     this.stopped = true
     clearTimeout(this.retryTimer)

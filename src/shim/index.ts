@@ -3,7 +3,7 @@
  *
  * Claude Desktop launches this process; it forwards every tool call to the Zap MCP app's
  * local HTTP server. It always advertises the tools, so they don't vanish from Claude when
- * the app is closed: calls just answer "open Zap MCP on your Mac".
+ * the app is closed: calls just answer "open Zap MCP on your computer".
  */
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -15,16 +15,23 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { APP_DIR_NAME, CONNECTION_FILE, SERVER_INSTRUCTIONS, TOOLS, type ToolName } from '../shared/tools'
 
-const VERSION = '0.2.0'
-const connectionFile =
-  process.env.ZAP_MCP_CONNECTION ?? join(homedir(), 'Library', 'Application Support', APP_DIR_NAME, CONNECTION_FILE)
+const VERSION = '0.2.1'
+
+/** Same folder as Electron's app.getPath('appData') on each OS. */
+function appDataDir(): string {
+  if (process.platform === 'win32') return process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming')
+  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support')
+  return process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config')
+}
+
+const connectionFile = process.env.ZAP_MCP_CONNECTION ?? join(appDataDir(), APP_DIR_NAME, CONNECTION_FILE)
 
 const notRunning = (detail?: string): CallToolResult => ({
   isError: true,
   content: [
     {
       type: 'text',
-      text: `O app Zap MCP não está rodando neste Mac. Peça ao usuário para abri-lo (ele fica na barra de menus) e tente de novo.${detail ? ` (${detail})` : ''}`
+      text: `O app Zap MCP não está rodando neste computador. Peça ao usuário para abri-lo (ele fica na barra de menus do Mac ou na bandeja do sistema) e tente de novo.${detail ? ` (${detail})` : ''}`
     }
   ]
 })
