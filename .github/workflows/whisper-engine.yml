@@ -1,6 +1,7 @@
 # Builds the optional speech-to-text engine (whisper.cpp's whisper-cli) that Zap MCP downloads
-# on demand, and publishes it as a release asset. The app pins the asset's SHA-256, so a
-# rebuild means updating WHISPER_ENGINE in src/main/transcription.ts.
+# on demand, for each platform, and publishes it as release assets. The app pins each asset's
+# SHA-256, so a rebuild means updating WHISPER_ENGINES in src/main/transcription.ts.
+# Assets that already exist are left untouched (their pinned SHA-256 must not change).
 name: whisper-engine
 
 on:
@@ -14,51 +15,98 @@ on:
 permissions:
   contents: write
 
+env:
+  VERSION: ${{ inputs.version }}
+  TAG: whisper-engine-${{ inputs.version }}
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+
 jobs:
-  build-macos-arm64:
-    runs-on: macos-15
-    env:
-      VERSION: ${{ inputs.version }}
+  release:
+    runs-on: ubuntu-latest
     steps:
+      - name: Create the release if missing
+        run: |
+          gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --latest=false --prerelease \
+            --title "Whisper engine ${VERSION}" \
+            --notes "Optional speech-to-text engine for Zap MCP: \`whisper-cli\` from [whisper.cpp ${VERSION}](https://github.com/ggml-org/whisper.cpp/releases/tag/${VERSION}) (MIT), built from source by [this workflow](https://github.com/${GH_REPO}/blob/main/.github/workflows/whisper-engine.yml) as a standalone binary. Zap MCP downloads it only when you turn on audio transcription."
+
+  build:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-arm64
+            os: macos-15
+          - target: linux-x64
+            os: ubuntu-22.04
+          - target: windows-x64
+            os: windows-2022
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - name: Skip if this platform is already published
+        run: |
+          ASSET="whisper-cli-${VERSION}-${TARGET}.tar.gz"
+          echo "ASSET=$ASSET" >> "$GITHUB_ENV"
+          if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$ASSET"; then
+            echo "SKIP=1" >> "$GITHUB_ENV"
+            echo "$ASSET already published, leaving it as is."
+          fi
+
       - name: Fetch whisper.cpp
+        if: env.SKIP != '1'
         run: git clone --depth 1 --branch "$VERSION" https://github.com/ggml-org/whisper.cpp.git src
 
-      - name: Build a standalone whisper-cli (static ggml, Metal shaders embedded)
+      - name: Build a standalone whisper-cli
+        if: env.SKIP != '1'
         working-directory: src
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DGGML_NATIVE=OFF \
-            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+          COMMON="-DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF"
+          # x86-64 baseline: AVX2/FMA (Intel Haswell 2013+, AMD Zen 2017+). No OpenMP: no extra runtime to ship.
+          X86="-DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_OPENMP=OFF"
+          case "$TARGET" in
+            macos-arm64)
+              cmake -S . -B build $COMMON -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON \
+                -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+              BIN=build/bin/whisper-cli ;;
+            linux-x64)
+              cmake -S . -B build $COMMON $X86 -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+              BIN=build/bin/whisper-cli ;;
+            windows-x64)
+              cmake -S . -B build -A x64 $COMMON $X86 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+              BIN=build/bin/Release/whisper-cli.exe ;;
+          esac
           cmake --build build --config Release -j 4 --target whisper-cli
+          echo "BIN=src/$BIN" >> "$GITHUB_ENV"
 
-      - name: Check it only links system libraries
+      - name: Show linked libraries
+        if: env.SKIP != '1'
         run: |
-          otool -L src/build/bin/whisper-cli
-          ! otool -L src/build/bin/whisper-cli | tail -n +2 | grep -vE '^\s+(/System/Library/|/usr/lib/)'
-          src/build/bin/whisper-cli --help > /dev/null
+          case "$TARGET" in
+            macos-arm64) otool -L "$BIN" ;;
+            linux-x64) ldd "$BIN" ;;
+            windows-x64) ls -la "$BIN" ;;
+          esac
 
-      - name: Package
+      - name: Smoke test (transcribe the bundled JFK sample with the tiny model)
+        if: env.SKIP != '1'
+        run: |
+          curl -sL -o tiny.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+          "$BIN" -m tiny.bin -f src/samples/jfk.wav -l en -np | tee out.txt
+          grep -qi "ask not what your country" out.txt
+
+      - name: Package and publish
+        if: env.SKIP != '1'
         run: |
           mkdir pkg
-          cp src/build/bin/whisper-cli pkg/
+          cp "$BIN" pkg/
           cp src/LICENSE pkg/LICENSE-whisper.cpp
-          ASSET="whisper-cli-${VERSION}-macos-arm64.tar.gz"
-          tar -czf "$ASSET" -C pkg whisper-cli LICENSE-whisper.cpp
-          shasum -a 256 "$ASSET" | tee "$ASSET.sha256"
-          echo "ASSET=$ASSET" >> "$GITHUB_ENV"
-
-      - name: Publish release asset
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          TAG="whisper-engine-${VERSION}"
-          if ! gh release view "$TAG" > /dev/null 2>&1; then
-            gh release create "$TAG" --latest=false --prerelease \
-              --title "Whisper engine ${VERSION} (macOS arm64)" \
-              --notes "Optional speech-to-text engine for Zap MCP: \`whisper-cli\` from [whisper.cpp ${VERSION}](https://github.com/ggml-org/whisper.cpp/releases/tag/${VERSION}) (MIT), built by [this workflow](https://github.com/${GH_REPO}/actions/runs/${{ github.run_id }}) as a standalone binary with Metal. Zap MCP downloads it only when you turn on audio transcription."
-          fi
-          gh release upload "$TAG" "$ASSET" "$ASSET.sha256" --clobber
+          tar -czf "$ASSET" -C pkg "$(basename "$BIN")" LICENSE-whisper.cpp
+          if command -v sha256sum > /dev/null; then sha256sum "$ASSET"; else shasum -a 256 "$ASSET"; fi | tee "$ASSET.sha256"
+          gh release upload "$TAG" "$ASSET" "$ASSET.sha256"
