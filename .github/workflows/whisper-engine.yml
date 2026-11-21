@@ -1,0 +1,64 @@
+# Builds the optional speech-to-text engine (whisper.cpp's whisper-cli) that Zap MCP downloads
+# on demand, and publishes it as a release asset. The app pins the asset's SHA-256, so a
+# rebuild means updating WHISPER_ENGINE in src/main/transcription.ts.
+name: whisper-engine
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: whisper.cpp tag to build
+        required: true
+        default: v1.9.5
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos-arm64:
+    runs-on: macos-15
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Fetch whisper.cpp
+        run: git clone --depth 1 --branch "$VERSION" https://github.com/ggml-org/whisper.cpp.git src
+
+      - name: Build a standalone whisper-cli (static ggml, Metal shaders embedded)
+        working-directory: src
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DGGML_NATIVE=OFF \
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+          cmake --build build --config Release -j 4 --target whisper-cli
+
+      - name: Check it only links system libraries
+        run: |
+          otool -L src/build/bin/whisper-cli
+          ! otool -L src/build/bin/whisper-cli | tail -n +2 | grep -vE '^\s+(/System/Library/|/usr/lib/)'
+          src/build/bin/whisper-cli --help > /dev/null
+
+      - name: Package
+        run: |
+          mkdir pkg
+          cp src/build/bin/whisper-cli pkg/
+          cp src/LICENSE pkg/LICENSE-whisper.cpp
+          ASSET="whisper-cli-${VERSION}-macos-arm64.tar.gz"
+          tar -czf "$ASSET" -C pkg whisper-cli LICENSE-whisper.cpp
+          shasum -a 256 "$ASSET" | tee "$ASSET.sha256"
+          echo "ASSET=$ASSET" >> "$GITHUB_ENV"
+
+      - name: Publish release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="whisper-engine-${VERSION}"
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --latest=false --prerelease \
+              --title "Whisper engine ${VERSION} (macOS arm64)" \
+              --notes "Optional speech-to-text engine for Zap MCP: \`whisper-cli\` from [whisper.cpp ${VERSION}](https://github.com/ggml-org/whisper.cpp/releases/tag/${VERSION}) (MIT), built by [this workflow](https://github.com/${GH_REPO}/actions/runs/${{ github.run_id }}) as a standalone binary with Metal. Zap MCP downloads it only when you turn on audio transcription."
+          fi
+          gh release upload "$TAG" "$ASSET" "$ASSET.sha256" --clobber
